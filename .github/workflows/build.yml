@@ -1,0 +1,66 @@
+name: Build apps
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Build APK
+        run: |
+          mkdir app && cd app
+          npm init -y
+          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/filesystem@6 @capacitor/share@6
+          mkdir www
+          cp ../index.html www/index.html
+          curl -L -o www/three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+          cat > www/native-shim.js <<'EOF'
+          (function(){const C=window.Capacitor;if(!C||!C.isNativePlatform||!C.isNativePlatform())return;async function save(a){try{const P=C.Plugins,b=await (await fetch(a.href)).blob(),data=await new Promise(r=>{const f=new FileReader();f.onload=()=>r(String(f.result).split(',')[1]);f.readAsDataURL(b)}),name=a.download||'stickforge.bin',res=await P.Filesystem.writeFile({path:name,data:data,directory:'DOCUMENTS'});await P.Share.share({title:name,url:res.uri})}catch(e){alert('Could not save the file: '+e)}}const oc=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download&&/^(blob|data):/.test(this.href)){save(this);return}return oc.call(this)};document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[download]');if(a&&/^(blob|data):/.test(a.href)){e.preventDefault();e.stopPropagation();save(a)}},true)})();
+          EOF
+          sed -i 's|<script src="three.min.js">|<script src="native-shim.js"></script><script src="three.min.js">|' www/index.html
+          echo '{"appId":"com.stickforge.studio","appName":"StickForge 3D","webDir":"www"}' > capacitor.config.json
+          npx cap add android
+          npx cap sync android
+          cd android && chmod +x gradlew && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StickForge-Android-APK
+          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build Windows installer
+        shell: bash
+        run: |
+          mkdir winapp && cd winapp
+          mkdir www
+          cp ../index.html www/index.html
+          curl -L -o www/three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+          cat > main.js <<'EOF'
+          const {app,BrowserWindow,Menu}=require('electron'),path=require('path');
+          app.commandLine.appendSwitch('autoplay-policy','no-user-gesture-required');
+          app.whenReady().then(()=>{const w=new BrowserWindow({width:1280,height:800,title:'StickForge 3D'});Menu.setApplicationMenu(null);w.loadFile(path.join(__dirname,'www','index.html'))});
+          app.on('window-all-closed',()=>app.quit());
+          EOF
+          cat > package.json <<'EOF'
+          {"name":"stickforge-3d","version":"1.0.0","description":"StickForge 3D","author":"StickForge","main":"main.js","devDependencies":{"electron":"31.0.0","electron-builder":"24.13.3"},"build":{"appId":"com.stickforge.studio","productName":"StickForge 3D","files":["main.js","www/**"],"win":{"target":"nsis"}}}
+          EOF
+          npm install
+          npx electron-builder --win nsis --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StickForge-Windows-Installer
+          path: winapp/dist/*.exe
